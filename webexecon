@@ -1,1 +1,311 @@
+cat << 'EOF' > ~/hacker-file/webexecon
+#!/usr/bin/env bash
 
+# webexecon - Full Interactive Web Link -> Electron + Node.js (.exe) Builder
+# Stays inside the interactive interface, asks only for the web link on convert,
+# and automatically creates a dedicated folder with all project, log, and .exe files inside.
+
+set -o pipefail
+
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+MAGENTA='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
+NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT_ROOT="$SCRIPT_DIR/web2exe_builds"
+mkdir -p "$OUT_ROOT"
+
+show_banner() {
+    clear
+    echo -e "${RED}  __        _______ ____  ____  _____  _______  _______  ____  _   _ ___ _     ____  _____ ____  ${NC}"
+    echo -e "${YELLOW}  \ \      / / ____| __ )|___ \| ____|/ /_   _|/ / ____|| __ )| | | |_ _| |   |  _ \| ____|  _ \ ${NC}"
+    echo -e "${GREEN}   \ \ /\ / /|  _| |  _ \  __) |  _| / /  | | / /|  _|  |  _ \| | | || || |   | | | |  _| | |_) |${NC}"
+    echo -e "${CYAN}    \ V  V / | |___| |_) |/ __/| |__/ /_  | |/ /_| |___ | |_) | |_| || || |___| |_| | |___|  _ < ${NC}"
+    echo -e "${MAGENTA}     \_/\_/  |_____|____/|_____|____/____| |_|____|_____||____/ \___/|___|_____|____/|_____|_| \_\ ${NC}"
+    echo -e "${WHITE}         [ Interactive Web Link -> Electron + Node.js (.exe) Builder & Auto-Folder Engine ]${NC}"
+    echo -e "${DIM}         Workspace Root: $OUT_ROOT${NC}"
+    echo -e "${CYAN}====================================================================================================${NC}"
+}
+
+wait_key() {
+    echo ""
+    read -r -p "$(echo -e "${DIM}Press Enter to return to the interface...${NC}")"
+}
+
+write_electron_project() {
+    local target_url="$1"
+    local app_name="$2"
+    local slug="$3"
+    local src_dir="$4"
+
+    cat << EOF > "$src_dir/package.json"
+{
+  "name": "$slug",
+  "version": "1.0.0",
+  "description": "Electron + Node.js desktop wrapper for $target_url",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-win": "electron-builder --win --x64",
+    "build-portable": "electron-builder --win portable --x64",
+    "build-nsis": "electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "com.amenmaki.$slug",
+    "productName": "$app_name",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}
+EOF
+
+    cat << EOF > "$src_dir/main.js"
+const { app, BrowserWindow, shell } = require('electron');
+
+const TARGET_URL = '$target_url';
+const APP_TITLE = '$app_name';
+
+function createMainWindow() {
+  const mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 800,
+    minHeight: 600,
+    title: APP_TITLE,
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+
+  mainWindow.loadURL(TARGET_URL);
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    const html = \`
+      <html>
+        <body style="font-family: Arial, sans-serif; background: #111; color: #eee; padding: 40px;">
+          <h2>Unable to Load Target Page</h2>
+          <p><strong>URL:</strong> \${validatedURL || TARGET_URL}</p>
+          <p><strong>Reason:</strong> \${errorDescription} (\${errorCode})</p>
+          <button onclick="window.location.href='\${TARGET_URL}'" style="padding: 10px 18px; cursor: pointer;">Retry</button>
+        </body>
+      </html>
+    \`;
+    mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  });
+}
+
+app.whenReady().then(() => {
+  createMainWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+EOF
+}
+
+convert_link_only() {
+    show_banner
+    echo -e "${CYAN}=== [1] Convert Web Link to .exe (Link-Only Prompt + Auto-Folder) ===${NC}"
+    echo -e "${DIM}Enter only the web URL below. App name, folder structure, and build log are created automatically.${NC}"
+    echo ""
+    read -r -p "$(echo -e "${WHITE}Enter Web Link: ${NC}")" target_url
+    target_url=$(echo "$target_url" | xargs)
+
+    if [[ ! "$target_url" =~ ^https?:// ]]; then
+        echo ""
+        echo -e "${RED}[!] Invalid link format. Please start with http:// or https://${NC}"
+        wait_key
+        return
+    fi
+
+    local domain slug app_name stamp bundle_dir src_dir exe_dir build_log
+    domain=$(echo "$target_url" | sed -E 's|^https?://([^/:]+).*|\1|' | sed -E 's/^www\.//')
+    slug=$(echo "$domain" | tr -cs '[:alnum:]' '_' | tr '[:upper:]' '[:lower:]' | sed -E 's/^_+|_+$//g')
+    [ -z "$slug" ] && slug="webapp"
+
+    app_name=$(echo "$slug" | awk -F'_' '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1' OFS='')
+    [ -z "$app_name" ] && app_name="WebApp"
+
+    stamp=$(date +%Y%m%d_%H%M%S)
+    bundle_dir="$OUT_ROOT/${slug}_${stamp}"
+    src_dir="$bundle_dir/electron_src"
+    exe_dir="$bundle_dir/exe_files"
+    build_log="$bundle_dir/build.log"
+
+    mkdir -p "$src_dir" "$exe_dir"
+
+    write_electron_project "$target_url" "$app_name" "$slug" "$src_dir"
+
+    {
+        echo "=========================================="
+        echo "Web-to-EXE Build Record"
+        echo "=========================================="
+        echo "Created At  : $(date)"
+        echo "Target URL  : $target_url"
+        echo "App Name    : $app_name"
+        echo "Package ID  : $slug"
+        echo "Bundle Dir  : $bundle_dir"
+        echo "Source Dir  : $src_dir"
+        echo "EXE Folder  : $exe_dir"
+        echo "=========================================="
+    } > "$build_log"
+
+    echo ""
+    echo -e "${GREEN}[+] Auto-created dedicated build folder:${NC}"
+    echo -e "    ${WHITE}$bundle_dir${NC}"
+    echo -e "    ${CYAN}├── electron_src/${NC}  (package.json + main.js)"
+    echo -e "    ${CYAN}├── exe_files/${NC}     (collected .exe outputs)"
+    echo -e "    ${CYAN}└── build.log${NC}      (build record & output log)"
+    echo ""
+
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        echo -e "${YELLOW}[*] Node.js $(node -v) and npm $(npm -v) detected.${NC}"
+        echo -e "${YELLOW}[*] Step A: Installing Electron & electron-builder dependencies...${NC}"
+        (
+            cd "$src_dir" || exit 1
+            npm install
+            echo ""
+            echo -e "${YELLOW}[*] Step B: Building Windows .exe package via electron-builder...${NC}"
+            npm run build-win
+        ) 2>&1 | tee -a "$build_log"
+        local rc=${PIPESTATUS[0]}
+
+        local copied=0
+        if [ -d "$src_dir/dist" ]; then
+            while IFS= read -r -d '' file_found; do
+                cp -f "$file_found" "$exe_dir/"
+                copied=$((copied + 1))
+            done < <(find "$src_dir/dist" -type f -iname "*.exe" -print0 2>/dev/null)
+        fi
+
+        echo ""
+        if [ "$copied" -gt 0 ]; then
+            echo -e "${GREEN}[SUCCESS] Copied $copied .exe file(s) into:${NC} ${WHITE}$exe_dir${NC}"
+            ls -lh "$exe_dir"/*.exe 2>/dev/null || true
+        else
+            echo -e "${YELLOW}[!] Build command finished (exit status: $rc), with no .exe found in dist/ yet.${NC}"
+            echo -e "${DIM}    Check $build_log for details. If running on Linux without Wine/Windows build tools,${NC}"
+            echo -e "${DIM}    copy $src_dir to a Windows PC with Node.js and run: npm install && npm run build-win${NC}"
+        fi
+    else
+        echo -e "${RED}[!] Node.js or npm is not installed on this machine.${NC}" | tee -a "$build_log"
+        echo -e "${YELLOW}[*] Your project folder is ready at:${NC} $src_dir"
+        echo -e "${DIM}    Install Node.js/npm or run on a Node host: cd \"$src_dir\" && npm install && npm run build-win${NC}"
+    fi
+
+    wait_key
+}
+
+list_generated_folders() {
+    show_banner
+    echo -e "${CYAN}=== [2] Auto-Created Build Folders & .exe Files ===${NC}"
+    echo ""
+    if [ -z "$(ls -A "$OUT_ROOT" 2>/dev/null)" ]; then
+        echo -e "${YELLOW}No build folders created yet.${NC}"
+    else
+        for d in "$OUT_ROOT"/*; do
+            [ -d "$d" ] || continue
+            echo -e "${GREEN}Folder:${NC} ${WHITE}$d${NC}"
+            local exes
+            exes=$(find "$d" -type f -iname "*.exe" 2>/dev/null || true)
+            if [ -n "$exes" ]; then
+                echo "$exes" | while read -r e; do
+                    echo -e "  ${CYAN}└── .exe:${NC} $e"
+                done
+            else
+                echo -e "  ${DIM}└── (No .exe inside yet)${NC}"
+            fi
+        done
+    fi
+    wait_key
+}
+
+check_environment() {
+    show_banner
+    echo -e "${CYAN}=== [3] Node.js, npm & Build Tool Environment ===${NC}"
+    echo ""
+    command -v node >/dev/null 2>&1 && echo -e "${GREEN}[+] Node.js :${NC} $(node -v)" || echo -e "${RED}[!] Node.js :${NC} Not installed"
+    command -v npm  >/dev/null 2>&1 && echo -e "${GREEN}[+] npm     :${NC} $(npm -v)"  || echo -e "${RED}[!] npm     :${NC} Not installed"
+    command -v wine >/dev/null 2>&1 && echo -e "${GREEN}[+] Wine    :${NC} $(wine --version 2>/dev/null | tr -d '\r')" || echo -e "${YELLOW}[~] Wine    :${NC} Not installed"
+    command -v git  >/dev/null 2>&1 && echo -e "${GREEN}[+] Git     :${NC} $(git --version)" || echo -e "${YELLOW}[~] Git     :${NC} Not installed"
+    wait_key
+}
+
+clean_old_builds() {
+    show_banner
+    echo -e "${CYAN}=== [4] Clean All Auto-Created Build Folders ===${NC}"
+    echo ""
+    read -r -p "Delete all folders inside $OUT_ROOT ? [y/N]: " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        rm -rf "$OUT_ROOT"/*
+        echo -e "${GREEN}[+] Cleared all folders in $OUT_ROOT${NC}"
+    else
+        echo -e "${YELLOW}[*] Cancelled.${NC}"
+    fi
+    wait_key
+}
+
+while true; do
+    show_banner
+    echo -e "${YELLOW}Choose an action (stays in interface after every task):${NC}"
+    echo -e "${GREEN}  [1]${NC} Convert Web Link to .exe (Link-Only Prompt + Auto-Folder + Build)"
+    echo -e "${GREEN}  [2]${NC} List Auto-Created Folders & .exe Outputs"
+    echo -e "${GREEN}  [3]${NC} Check Node.js, npm & Build Environment"
+    echo -e "${GREEN}  [4]${NC} Clean Old Auto-Created Build Folders"
+    echo -e "${RED}  [0]${NC} Exit Interface"
+    echo ""
+    read -r -p "$(echo -e "${WHITE}Enter choice [0-4]: ${NC}")" menu_choice
+
+    case "$menu_choice" in
+        1) convert_link_only ;;
+        2) list_generated_folders ;;
+        3) check_environment ;;
+        4) clean_old_builds ;;
+        0)
+            echo ""
+            echo -e "${CYAN}Exiting Web Link -> .exe Interface.${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid option. Select 0-4.${NC}"
+            sleep 1
+            ;;
+    esac
+done
+EOF
