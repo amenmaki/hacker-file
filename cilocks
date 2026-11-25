@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+
+# cilocks_ext.sh - Full Multi-Menu Diagnostic & Audit Module for CiLocks
+# Authorized devices and networks only.
+
+set -o pipefail
+
+# Color Palette
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+MAGENTA='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+DIM='\033[2m'
+NC='\033[0m'
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOG_DIR"
+SESSION_ID="$(date +%Y%m%d_%H%M%S)"
+AUDIT_LOG="$LOG_DIR/cilocks_full_${SESSION_ID}.log"
+
+log_msg() {
+    local level="$1"
+    shift
+    local text="$*"
+    local clean_text
+    clean_text=$(echo -e "$text" | sed -r 's/\x1B\[[0-9;]*[mK]//g')
+    printf "[%s] [%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$clean_text" >> "$AUDIT_LOG"
+    echo -e "$text"
+}
+
+pause_return() {
+    echo ""
+    read -r -p "$(echo -e "${DIM}Press Enter to return to menu...${NC}")"
+}
+
+show_banner() {
+    clear
+    echo -e "${RED}   ____ _ _     ____            _         _____ _____ _____ ${NC}"
+    echo -e "${YELLOW}  / ___(_) |   / ___|  ___  ___| | _____ | ____|_   _|_   _|${NC}"
+    echo -e "${GREEN} | |   | | |   | |     / _ \/ __| |/ / __||  _|   | |   | |  ${NC}"
+    echo -e "${CYAN} | |___| | |   | |___ | (_) \__ \   <\__ \| |___  | |   | |  ${NC}"
+    echo -e "${MAGENTA}  \____|_|_|    \____| \___/|___/_|\_\___/|_____| |_|   |_|  ${NC}"
+    echo -e "${WHITE}       [ CiLocks Extended Diagnostic & Audit Suite ]${NC}"
+    echo -e "${DIM}       Session Log: $AUDIT_LOG${NC}"
+    echo -e "${CYAN}====================================================================${NC}"
+}
+
+require_adb() {
+    if ! command -v adb >/dev/null 2>&1; then
+        log_msg "ERROR" "${RED}[!] 'adb' binary not found. Install android-tools-adb / platform-tools.${NC}"
+        return 1
+    fi
+    return 0
+}
+
+require_authorized_device() {
+    require_adb || return 1
+    local state
+    state=$(adb get-state 2>/dev/null || echo "none")
+    if [ "$state" != "device" ]; then
+        log_msg "WARN" "${RED}[!] No authorized device in 'device' state (current state: $state).${NC}"
+        log_msg "INFO" "${YELLOW}[*] Tip: Check USB cable, enable USB Debugging, and tap 'Allow' on the device prompt.${NC}"
+        return 1
+    fi
+    return 0
+}
+
+# ====================================================================
+# FEATURE 1: ADB & USB Debugging Health Check (with Sub-Menu)
+# ====================================================================
+menu_feature_1() {
+    while true; do
+        show_banner
+        echo -e "${CYAN}--- [1] ADB & USB Debugging Health Check ---${NC}"
+        echo -e "${WHITE}  1) List connected ADB devices (-l)${NC}"
+        echo -e "${WHITE}  2) Restart ADB server & verify daemon${NC}"
+        echo -e "${WHITE}  3) Check ADB version & host environment${NC}"
+        echo -e "${WHITE}  4) Run full Feature 1 check & log${NC}"
+        echo -e "${WHITE}  0) Back to Main Menu${NC}"
+        echo ""
+        read -r -p "Select [0-4]: " sub1
+
+        case "$sub1" in
+            1)
+                require_adb || { pause_return; continue; }
+                echo ""
+                out=$(adb devices -l 2>&1)
+                log_msg "ADB-LIST" "${GREEN}$out${NC}"
+                pause_return
+                ;;
+            2)
+                require_adb || { pause_return; continue; }
+                echo ""
+                adb kill-server >/dev/null 2>&1
+                adb start-server >/dev/null 2>&1
+                out=$(adb devices -l 2>&1)
+                log_msg "ADB-RESTART" "${CYAN}ADB server restarted:${NC}\n$out"
+                pause_return
+                ;;
+            3)
+                require_adb || { pause_return; continue; }
+                echo ""
+                ver=$(adb version 2>&1)
+                log_msg "ADB-VER" "${WHITE}$ver${NC}"
+                pause_return
+                ;;
+            4)
+                require_adb || { pause_return; continue; }
+                echo ""
+                log_msg "F1-FULL" "${CYAN}Running full ADB health diagnostic...${NC}"
+                log_msg "F1-VER" "$(adb version 2>&1)"
+                log_msg "F1-DEV" "$(adb devices -l 2>&1)"
+                pause_return
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid selection.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ====================================================================
+# FEATURE 2: Device Property & Security Posture Snapshot (Sub-Menu)
+# ====================================================================
+menu_feature_2() {
+    while true; do
+        show_banner
+        echo -e "${CYAN}--- [2] Device Property & Security Posture Snapshot ---${NC}"
+        echo -e "${WHITE}  1) Hardware & model properties${NC}"
+        echo -e "${WHITE}  2) OS version, security patch & encryption state${NC}"
+        echo -e "${WHITE}  3) Bootloader, SELinux & debug flags${NC}"
+        echo -e "${WHITE}  4) Full posture snapshot & log export${NC}"
+        echo -e "${WHITE}  0) Back to Main Menu${NC}"
+        echo ""
+        read -r -p "Select [0-4]: " sub2
+
+        case "$sub2" in
+            1)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+                brand=$(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r')
+                device=$(adb shell getprop ro.product.device 2>/dev/null | tr -d '\r')
+                abi=$(adb shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+                log_msg "F2-HW" "${YELLOW}Brand:${NC} $brand | ${YELLOW}Model:${NC} $model | ${YELLOW}Device:${NC} $device | ${YELLOW}ABI:${NC} $abi"
+                pause_return
+                ;;
+            2)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                rel=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')
+                sdk=$(adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+                patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r')
+                crypto=$(adb shell getprop ro.crypto.state 2>/dev/null | tr -d '\r')
+                log_msg "F2-OS" "${YELLOW}Android:${NC} $rel (API $sdk) | ${YELLOW}Patch:${NC} $patch | ${YELLOW}Encryption:${NC} $crypto"
+                pause_return
+                ;;
+            3)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                boot_state=$(adb shell getprop ro.boot.verifiedbootstate 2>/dev/null | tr -d '\r')
+                selinux=$(adb shell getenforce 2>/dev/null | tr -d '\r')
+                adb_sec=$(adb shell getprop ro.secure 2>/dev/null | tr -d '\r')
+                adb_dbg=$(adb shell getprop ro.debuggable 2>/dev/null | tr -d '\r')
+                log_msg "F2-SEC" "${YELLOW}VerifiedBoot:${NC} ${boot_state:-N/A} | ${YELLOW}SELinux:${NC} ${selinux:-N/A} | ${YELLOW}ro.secure:${NC} ${adb_sec:-N/A} | ${YELLOW}ro.debuggable:${NC} ${adb_dbg:-N/A}"
+                pause_return
+                ;;
+            4)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                snap=$(
+                    echo "Model: $(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+                    echo "Brand: $(adb shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
+                    echo "Android: $(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')"
+                    echo "Security Patch: $(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r')"
+                    echo "Encryption: $(adb shell getprop ro.crypto.state 2>/dev/null | tr -d '\r')"
+                    echo "Verified Boot: $(adb shell getprop ro.boot.verifiedbootstate 2>/dev/null | tr -d '\r')"
+                    echo "SELinux: $(adb shell getenforce 2>/dev/null | tr -d '\r')"
+                )
+                log_msg "F2-SNAPSHOT" "${GREEN}$snap${NC}"
+                pause_return
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid selection.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ====================================================================
+# FEATURE 3: Lock Screen & Screen Timeout State Inspector (Sub-Menu)
+# ====================================================================
+menu_feature_3() {
+    while true; do
+        show_banner
+        echo -e "${CYAN}--- [3] Lock Screen & Screen Timeout State Inspector ---${NC}"
+        echo -e "${WHITE}  1) Check screen timeout setting (ms & seconds)${NC}"
+        echo -e "${WHITE}  2) Check keyguard & lockscreen window status${NC}"
+        echo -e "${WHITE}  3) Check display power & wakefulness state${NC}"
+        echo -e "${WHITE}  4) Full lock/timeout check & log${NC}"
+        echo -e "${WHITE}  0) Back to Main Menu${NC}"
+        echo ""
+        read -r -p "Select [0-4]: " sub3
+
+        case "$sub3" in
+            1)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                ms=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')
+                if [[ "$ms" =~ ^[0-9]+$ ]]; then
+                    sec=$((ms / 1000))
+                    log_msg "F3-TIMEOUT" "${YELLOW}Screen Timeout:${NC} ${ms} ms (${sec} seconds)"
+                else
+                    log_msg "F3-TIMEOUT" "${YELLOW}Screen Timeout:${NC} ${ms:-Unknown}"
+                fi
+                pause_return
+                ;;
+            2)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                kg=$(adb shell dumpsys window policy 2>/dev/null | grep -E "mShowingLockscreen|isKeyguardShowing|mDreamingLockscreen" | head -n 8)
+                log_msg "F3-KEYGUARD" "${CYAN}${kg:-No keyguard lines matched}${NC}"
+                pause_return
+                ;;
+            3)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                pwr=$(adb shell dumpsys power 2>/dev/null | grep -E "mWakefulness=|Display Power: state=" | head -n 6)
+                log_msg "F3-POWER" "${WHITE}${pwr:-No power state lines matched}${NC}"
+                pause_return
+                ;;
+            4)
+                require_authorized_device || { pause_return; continue; }
+                echo ""
+                ms=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')
+                kg=$(adb shell dumpsys window policy 2>/dev/null | grep -E "mShowingLockscreen|isKeyguardShowing" | head -n 5)
+                pwr=$(adb shell dumpsys power 2>/dev/null | grep -E "mWakefulness=|Display Power: state=" | head -n 4)
+                log_msg "F3-FULL" "Timeout(ms): ${ms:-N/A}\n${kg}\n${pwr}"
+                pause_return
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid selection.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ====================================================================
+# FEATURE 4: Local Listener & Port Exposure Check (Sub-Menu)
+# ====================================================================
+menu_feature_4() {
+    while true; do
+        show_banner
+        echo -e "${CYAN}--- [4] Local Listener & Port Exposure Check ---${NC}"
+        echo -e "${WHITE}  1) List active ADB port forwards & reverse rules${NC}"
+        echo -e "${WHITE}  2) List listening TCP/UDP sockets on Linux host (ss)${NC}"
+        echo -e "${WHITE}  3) Check ADB TCP port (5555) exposure${NC}"
+        echo -e "${WHITE}  4) Full listener check & log${NC}"
+        echo -e "${WHITE}  0) Back to Main Menu${NC}"
+        echo ""
+        read -r -p "Select [0-4]: " sub4
+
+        case "$sub4" in
+            1)
+                require_adb || { pause_return; continue; }
+                echo ""
+                fwd=$(adb forward --list 2>&1)
+                rev=$(adb reverse --list 2>&1)
+                log_msg "F4-ADB-FWD" "Forwards:\n${fwd:-None}\nReverse:\n${rev:-None}"
+                pause_return
+                ;;
+            2)
+                echo ""
+                if command -v ss >/dev/null 2>&1; then
+                    sock=$(ss -tulpn 2>/dev/null | grep -E "LISTEN|UNCONN" | head -n 20)
+                    log_msg "F4-SOCKETS" "${CYAN}${sock:-No listening sockets found}${NC}"
+                else
+                    log_msg "WARN" "${RED}'ss' command not available.${NC}"
+                fi
+                pause_return
+                ;;
+            3)
+                echo ""
+                if command -v ss >/dev/null 2>&1; then
+                    p5555=$(ss -tuln 2>/dev/null | grep ":5555 " || true)
+                    if [ -n "$p5555" ]; then
+                        log_msg "F4-5555" "${RED}[!] Port 5555 listener detected:${NC}\n$p5555"
+                    else
+                        log_msg "F4-5555" "${GREEN}[+] No active listener on port 5555.${NC}"
+                    fi
+                else
+                    log_msg "WARN" "${RED}'ss' command not available.${NC}"
+                fi
+                pause_return
+                ;;
+            4)
+                echo ""
+                fwd=$(command -v adb >/dev/null 2>&1 && adb forward --list 2>&1 || echo "adb N/A")
+                sock=$(command -v ss >/dev/null 2>&1 && ss -tuln 2>/dev/null | grep -E "LISTEN|UNCONN" | head -n 20 || echo "ss N/A")
+                log_msg "F4-FULL" "ADB Forwards:\n${fwd}\n\nListening Sockets:\n${sock}"
+                pause_return
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid selection.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ====================================================================
+# FEATURE 5: Audit Log Viewer, Export & Management (Sub-Menu)
+# ====================================================================
+menu_feature_5() {
+    while true; do
+        show_banner
+        echo -e "${CYAN}--- [5] Audit Log Viewer, Export & Management ---${NC}"
+        echo -e "${WHITE}  1) View current session log tail${NC}"
+        echo -e "${WHITE}  2) List all saved audit logs in CiLocks/logs${NC}"
+        echo -e "${WHITE}  3) Generate a consolidated summary report file${NC}"
+        echo -e "${WHITE}  4) Run ALL checks (Features 1-4) into current log${NC}"
+        echo -e "${WHITE}  0) Back to Main Menu${NC}"
+        echo ""
+        read -r -p "Select [0-4]: " sub5
+
+        case "$sub5" in
+            1)
+                echo ""
+                if [ -f "$AUDIT_LOG" ]; then
+                    tail -n 30 "$AUDIT_LOG"
+                else
+                    echo "No entries written yet."
+                fi
+                pause_return
+                ;;
+            2)
+                echo ""
+                ls -lh "$LOG_DIR" 2>/dev/null || echo "No logs directory found."
+                pause_return
+                ;;
+            3)
+                echo ""
+                summary_file="$LOG_DIR/cilocks_summary_${SESSION_ID}.txt"
+                {
+                    echo "CiLocks Consolidated Summary Report"
+                    echo "Generated: $(date)"
+                    echo "Source Log: $AUDIT_LOG"
+                    echo "========================================"
+                    [ -f "$AUDIT_LOG" ] && cat "$AUDIT_LOG" || echo "No session entries."
+                } > "$summary_file"
+                log_msg "F5-EXPORT" "${GREEN}[+] Consolidated summary exported to: $summary_file${NC}"
+                pause_return
+                ;;
+            4)
+                echo ""
+                log_msg "F5-ALL" "${YELLOW}[*] Running Features 1 through 4 into $AUDIT_LOG ...${NC}"
+                if command -v adb >/dev/null 2>&1; then
+                    log_msg "ALL-ADB" "$(adb devices -l 2>&1)"
+                    if [ "$(adb get-state 2>/dev/null)" = "device" ]; then
+                        log_msg "ALL-PROP" "Model=$(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r') | Android=$(adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r') | Patch=$(adb shell getprop ro.build.version.security_patch 2>/dev/null | tr -d '\r')"
+                        log_msg "ALL-LOCK" "Timeout=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')"
+                    fi
+                fi
+                if command -v ss >/dev/null 2>&1; then
+                    log_msg "ALL-SOCK" "$(ss -tuln 2>/dev/null | head -n 15)"
+                fi
+                log_msg "F5-ALL-DONE" "${GREEN}[+] Completed full audit run.${NC}"
+                pause_return
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid selection.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ====================================================================
+# MAIN MENU LOOP
+# ====================================================================
+while true; do
+    show_banner
+    echo -e "${YELLOW}Select a module:${NC}"
+    echo -e "${GREEN}  [1]${NC} ADB & USB Debugging Health Check (Sub-Menu)"
+    echo -e "${GREEN}  [2]${NC} Device Property & Security Posture Snapshot (Sub-Menu)"
+    echo -e "${GREEN}  [3]${NC} Lock Screen & Screen Timeout State Inspector (Sub-Menu)"
+    echo -e "${GREEN}  [4]${NC} Local Listener & Port Exposure Check (Sub-Menu)"
+    echo -e "${GREEN}  [5]${NC} Audit Log Viewer, Export & Full Run (Sub-Menu)"
+    echo -e "${RED}  [0]${NC} Exit"
+    echo ""
+    read -r -p "$(echo -e "${WHITE}Enter choice [0-5]: ${NC}")" choice
+
+    case "$choice" in
+        1) menu_feature_1 ;;
+        2) menu_feature_2 ;;
+        3) menu_feature_3 ;;
+        4) menu_feature_4 ;;
+        5) menu_feature_5 ;;
+        0)
+            log_msg "EXIT" "${CYAN}Session ended. Log saved at $AUDIT_LOG${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid option. Choose 0-5.${NC}"
+            sleep 1
+            ;;
+    esac
+done
