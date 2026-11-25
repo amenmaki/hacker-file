@@ -44,7 +44,7 @@ write_electron_project() {
     local slug="$3"
     local src_dir="$4"
 
-    cat << EOF > "$src_dir/package.json"
+    cat << JSONEOF > "$src_dir/package.json"
 {
   "name": "$slug",
   "version": "1.0.0",
@@ -74,9 +74,9 @@ write_electron_project() {
     "electron-builder": "^25.1.8"
   }
 }
-EOF
+JSONEOF
 
-    cat << EOF > "$src_dir/main.js"
+    cat << JSEOF > "$src_dir/main.js"
 const { app, BrowserWindow, shell } = require('electron');
 
 const TARGET_URL = '$target_url';
@@ -136,7 +136,7 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-EOF
+JSEOF
 }
 
 convert_link_only() {
@@ -309,3 +309,5 @@ while true; do
     esac
 done
 EOF
+chmod +x ~/hacker-file/webexecon
+~/hacker-file/webexecon
